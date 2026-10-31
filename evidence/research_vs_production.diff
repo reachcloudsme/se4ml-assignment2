@@ -1,0 +1,254 @@
+diff --git a/predictops-ml/app.py b/predictops-ml/app.py
+index 038451a..cbb8e59 100644
+--- a/predictops-ml/app.py
++++ b/predictops-ml/app.py
+@@ -1,13 +1,16 @@
+-import time
++import logging
+
+ import numpy as np
+ import requests
+-from fastapi import FastAPI
++from api_schemas import ErrorResponse, ScoreAllResponse, ScoreResult
++from data.mimir import query_mimir
++from fastapi import FastAPI, HTTPException
+ from fastapi.responses import Response
++from model.inference import calculate_anomaly_score
+ from prometheus_client import Gauge, generate_latest
+-from time_rcd import TimeRCDDetector
+-
+
++logging.basicConfig(level=logging.INFO)
++logger = logging.getLogger(__name__)
+ app = FastAPI()
+
+ MIMIR_URL = "http://mimir-gateway.monitoring.svc.cluster.local"
+@@ -39,50 +42,21 @@ THRESHOLDS = {
+ }
+
+
+-detector = TimeRCDDetector.from_pretrained(
+-    variant="multi",
+-    device="cpu"
+-)
+-
+-
+-anomaly = Gauge(
+-    "predictops_anomaly_score",
+-    "Latest anomaly score",
+-    ["target_service"]
+-)
++anomaly = Gauge("predictops_anomaly_score", "Latest anomaly score", ["target_service"])
+
+ threshold_metric = Gauge(
+     "predictops_anomaly_threshold",
+     "Anomaly threshold for each service",
+-    ["target_service"]
++    ["target_service"],
+ )
+
+ anomaly_state = Gauge(
+     "predictops_is_anomaly",
+     "Whether the service is currently anomalous",
+-    ["target_service"]
++    ["target_service"],
+ )
+
+
+-def query_mimir(promql):
+-    end = int(time.time())
+-    start = end - 600
+-
+-    response = requests.get(
+-        f"{MIMIR_URL}/prometheus/api/v1/query_range",
+-        params={
+-            "query": promql,
+-            "start": start,
+-            "end": end,
+-            "step": 30,
+-        },
+-        timeout=10,
+-    )
+-
+-    response.raise_for_status()
+-    return response.json()
+-
+-
+ def score_service(service):
+     cpu_query = f"""
+     sum(
+@@ -102,27 +76,22 @@ def score_service(service):
+     )
+     """
+
+-    cpu_data = query_mimir(cpu_query)
+-    memory_data = query_mimir(memory_query)
++    cpu_data = query_mimir(cpu_query, MIMIR_URL)
++    memory_data = query_mimir(memory_query, MIMIR_URL)
+
+     cpu_results = cpu_data["data"]["result"]
+     memory_results = memory_data["data"]["result"]
+
+     if not cpu_results or not memory_results:
++        logger.warning("Missing CPU or memory telemetry for service=%s", service)
+         return {
+             "service": service,
+             "status": "no_data",
+         }
+
+-    cpu_values = [
+-        float(value[1])
+-        for value in cpu_results[0]["values"]
+-    ]
++    cpu_values = [float(value[1]) for value in cpu_results[0]["values"]]
+
+-    memory_values = [
+-        float(value[1])
+-        for value in memory_results[0]["values"]
+-    ]
++    memory_values = [float(value[1]) for value in memory_results[0]["values"]]
+
+     n = min(
+         len(cpu_values),
+@@ -130,38 +99,30 @@ def score_service(service):
+     )
+
+     if n < 5:
++        logger.warning("Insufficient telemetry for service=%s: points=%d", service, n)
+         return {
+             "service": service,
+             "status": "insufficient_data",
+             "points": n,
+         }
+
+-    window = np.column_stack([
+-        cpu_values[-n:],
+-        memory_values[-n:],
+-    ])
+-
+-    scores = detector.predict(window)
+-
+-    latest_score = round(
+-        float(np.asarray(scores).reshape(-1)[-1]),
+-        5
++    window = np.column_stack(
++        [
++            cpu_values[-n:],
++            memory_values[-n:],
++        ]
+     )
+
++    latest_score = calculate_anomaly_score(window)
++
+     service_threshold = round(THRESHOLDS[service], 5)
+     is_anomaly = latest_score > service_threshold
+
+-    anomaly.labels(
+-        target_service=service
+-    ).set(latest_score)
++    anomaly.labels(target_service=service).set(latest_score)
+
+-    threshold_metric.labels(
+-        target_service=service
+-    ).set(service_threshold)
++    threshold_metric.labels(target_service=service).set(service_threshold)
+
+-    anomaly_state.labels(
+-        target_service=service
+-    ).set(1 if is_anomaly else 0)
++    anomaly_state.labels(target_service=service).set(1 if is_anomaly else 0)
+
+     return {
+         "service": service,
+@@ -172,7 +133,7 @@ def score_service(service):
+     }
+
+
+-@app.post("/score")
++@app.post("/score", response_model=ScoreAllResponse)
+ def score_all_services():
+     results = []
+
+@@ -181,12 +142,15 @@ def score_all_services():
+             result = score_service(service)
+             results.append(result)
+
+-        except Exception as exc:
+-            results.append({
+-                "service": service,
+-                "status": "error",
+-                "error": str(exc),
+-            })
++        except (requests.RequestException, ValueError, KeyError, RuntimeError) as exc:
++            logger.exception("Failed to score service: %s", service)
++            results.append(
++                {
++                    "service": service,
++                    "status": "error",
++                    "error": str(exc),
++                }
++            )
+
+     return {
+         "namespace": NAMESPACE,
+@@ -194,23 +158,40 @@ def score_all_services():
+     }
+
+
+-@app.post("/score/{service}")
++@app.post(
++    "/score/{service}",
++    response_model=ScoreResult,
++    responses={
++        404: {"model": ErrorResponse},
++        502: {"model": ErrorResponse},
++        503: {"model": ErrorResponse},
++        500: {"model": ErrorResponse},
++    },
++)
+ def score_single_service(service: str):
+     if service not in SERVICES:
+-        return {
+-            "error": "unknown service",
+-            "allowed_services": SERVICES,
+-        }
++        raise HTTPException(
++            status_code=404,
++            detail="Unknown service",
++        )
+
+     try:
+-        return score_service(service)
+-
+-    except Exception as exc:
+-        return {
+-            "service": service,
+-            "status": "error",
+-            "error": str(exc),
+-        }
++        result = score_service(service)
++    except requests.RequestException:
++        logger.exception("Mimir unavailable for service=%s", service)
++        raise HTTPException(status_code=503, detail="Metrics service unavailable")
++    except (ValueError, KeyError, TypeError, IndexError):
++        logger.exception("Invalid telemetry for service=%s", service)
++        raise HTTPException(status_code=502, detail="Invalid upstream telemetry")
++    except RuntimeError:
++        logger.exception("Inference failed for service=%s", service)
++        raise HTTPException(status_code=500, detail="Anomaly inference failed")
++
++    if result["status"] == "no_data" if "status" in result else False:
++        raise HTTPException(status_code=503, detail="Metrics data unavailable")
++    if result["status"] == "insufficient_data" if "status" in result else False:
++        raise HTTPException(status_code=503, detail="Insufficient metrics data")
++    return result
+
+
+ @app.get("/metrics")
+@@ -227,4 +208,4 @@ def health():
+         "status": "ok",
+         "namespace": NAMESPACE,
+         "services": SERVICES,
+-    }
+\ No newline at end of file
++    }

@@ -2,6 +2,7 @@ import logging
 
 import numpy as np
 import requests
+from api_schemas import ErrorResponse, ScoreAllResponse, ScoreResult
 from data.mimir import query_mimir
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
@@ -82,6 +83,7 @@ def score_service(service):
     memory_results = memory_data["data"]["result"]
 
     if not cpu_results or not memory_results:
+        logger.warning("Missing CPU or memory telemetry for service=%s", service)
         return {
             "service": service,
             "status": "no_data",
@@ -97,6 +99,7 @@ def score_service(service):
     )
 
     if n < 5:
+        logger.warning("Insufficient telemetry for service=%s: points=%d", service, n)
         return {
             "service": service,
             "status": "insufficient_data",
@@ -130,7 +133,7 @@ def score_service(service):
     }
 
 
-@app.post("/score")
+@app.post("/score", response_model=ScoreAllResponse)
 def score_all_services():
     results = []
 
@@ -155,7 +158,16 @@ def score_all_services():
     }
 
 
-@app.post("/score/{service}")
+@app.post(
+    "/score/{service}",
+    response_model=ScoreResult,
+    responses={
+        404: {"model": ErrorResponse},
+        502: {"model": ErrorResponse},
+        503: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
 def score_single_service(service: str):
     if service not in SERVICES:
         raise HTTPException(
@@ -164,15 +176,22 @@ def score_single_service(service: str):
         )
 
     try:
-        return score_service(service)
+        result = score_service(service)
+    except requests.RequestException:
+        logger.exception("Mimir unavailable for service=%s", service)
+        raise HTTPException(status_code=503, detail="Metrics service unavailable")
+    except (ValueError, KeyError, TypeError, IndexError):
+        logger.exception("Invalid telemetry for service=%s", service)
+        raise HTTPException(status_code=502, detail="Invalid upstream telemetry")
+    except RuntimeError:
+        logger.exception("Inference failed for service=%s", service)
+        raise HTTPException(status_code=500, detail="Anomaly inference failed")
 
-    except (requests.RequestException, ValueError, KeyError, RuntimeError) as exc:
-        logger.exception("Failed to score service: %s", service)
-        return {
-            "service": service,
-            "status": "error",
-            "error": str(exc),
-        }
+    if result["status"] == "no_data" if "status" in result else False:
+        raise HTTPException(status_code=503, detail="Metrics data unavailable")
+    if result["status"] == "insufficient_data" if "status" in result else False:
+        raise HTTPException(status_code=503, detail="Insufficient metrics data")
+    return result
 
 
 @app.get("/metrics")

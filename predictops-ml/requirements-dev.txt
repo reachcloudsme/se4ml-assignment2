@@ -3,3 +3,4 @@ black
 ruff
 httpx
 bandit
+scikit-learn>=1.5,<2
