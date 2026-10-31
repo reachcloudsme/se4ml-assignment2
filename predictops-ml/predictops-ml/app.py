@@ -1,13 +1,15 @@
-import time
+import logging
 
 import numpy as np
 import requests
-from fastapi import FastAPI
+from data.mimir import query_mimir
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
+from model.inference import calculate_anomaly_score
 from prometheus_client import Gauge, generate_latest
-from time_rcd import TimeRCDDetector
 
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 app = FastAPI()
 
 MIMIR_URL = "http://mimir-gateway.monitoring.svc.cluster.local"
@@ -39,48 +41,19 @@ THRESHOLDS = {
 }
 
 
-detector = TimeRCDDetector.from_pretrained(
-    variant="multi",
-    device="cpu"
-)
-
-
-anomaly = Gauge(
-    "predictops_anomaly_score",
-    "Latest anomaly score",
-    ["target_service"]
-)
+anomaly = Gauge("predictops_anomaly_score", "Latest anomaly score", ["target_service"])
 
 threshold_metric = Gauge(
     "predictops_anomaly_threshold",
     "Anomaly threshold for each service",
-    ["target_service"]
+    ["target_service"],
 )
 
 anomaly_state = Gauge(
     "predictops_is_anomaly",
     "Whether the service is currently anomalous",
-    ["target_service"]
+    ["target_service"],
 )
-
-
-def query_mimir(promql):
-    end = int(time.time())
-    start = end - 600
-
-    response = requests.get(
-        f"{MIMIR_URL}/prometheus/api/v1/query_range",
-        params={
-            "query": promql,
-            "start": start,
-            "end": end,
-            "step": 30,
-        },
-        timeout=10,
-    )
-
-    response.raise_for_status()
-    return response.json()
 
 
 def score_service(service):
@@ -102,8 +75,8 @@ def score_service(service):
     )
     """
 
-    cpu_data = query_mimir(cpu_query)
-    memory_data = query_mimir(memory_query)
+    cpu_data = query_mimir(cpu_query, MIMIR_URL)
+    memory_data = query_mimir(memory_query, MIMIR_URL)
 
     cpu_results = cpu_data["data"]["result"]
     memory_results = memory_data["data"]["result"]
@@ -114,15 +87,9 @@ def score_service(service):
             "status": "no_data",
         }
 
-    cpu_values = [
-        float(value[1])
-        for value in cpu_results[0]["values"]
-    ]
+    cpu_values = [float(value[1]) for value in cpu_results[0]["values"]]
 
-    memory_values = [
-        float(value[1])
-        for value in memory_results[0]["values"]
-    ]
+    memory_values = [float(value[1]) for value in memory_results[0]["values"]]
 
     n = min(
         len(cpu_values),
@@ -136,32 +103,23 @@ def score_service(service):
             "points": n,
         }
 
-    window = np.column_stack([
-        cpu_values[-n:],
-        memory_values[-n:],
-    ])
-
-    scores = detector.predict(window)
-
-    latest_score = round(
-        float(np.asarray(scores).reshape(-1)[-1]),
-        5
+    window = np.column_stack(
+        [
+            cpu_values[-n:],
+            memory_values[-n:],
+        ]
     )
+
+    latest_score = calculate_anomaly_score(window)
 
     service_threshold = round(THRESHOLDS[service], 5)
     is_anomaly = latest_score > service_threshold
 
-    anomaly.labels(
-        target_service=service
-    ).set(latest_score)
+    anomaly.labels(target_service=service).set(latest_score)
 
-    threshold_metric.labels(
-        target_service=service
-    ).set(service_threshold)
+    threshold_metric.labels(target_service=service).set(service_threshold)
 
-    anomaly_state.labels(
-        target_service=service
-    ).set(1 if is_anomaly else 0)
+    anomaly_state.labels(target_service=service).set(1 if is_anomaly else 0)
 
     return {
         "service": service,
@@ -181,12 +139,15 @@ def score_all_services():
             result = score_service(service)
             results.append(result)
 
-        except Exception as exc:
-            results.append({
-                "service": service,
-                "status": "error",
-                "error": str(exc),
-            })
+        except (requests.RequestException, ValueError, KeyError, RuntimeError) as exc:
+            logger.exception("Failed to score service: %s", service)
+            results.append(
+                {
+                    "service": service,
+                    "status": "error",
+                    "error": str(exc),
+                }
+            )
 
     return {
         "namespace": NAMESPACE,
@@ -197,15 +158,16 @@ def score_all_services():
 @app.post("/score/{service}")
 def score_single_service(service: str):
     if service not in SERVICES:
-        return {
-            "error": "unknown service",
-            "allowed_services": SERVICES,
-        }
+        raise HTTPException(
+            status_code=404,
+            detail="Unknown service",
+        )
 
     try:
         return score_service(service)
 
-    except Exception as exc:
+    except (requests.RequestException, ValueError, KeyError, RuntimeError) as exc:
+        logger.exception("Failed to score service: %s", service)
         return {
             "service": service,
             "status": "error",
