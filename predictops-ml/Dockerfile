@@ -27,6 +27,7 @@ RUN pip install --no-cache-dir \
     requests \
     prometheus-client
 COPY app.py .
+COPY api_schemas.py .
 COPY data/ ./data/
 COPY model/ ./model/
 

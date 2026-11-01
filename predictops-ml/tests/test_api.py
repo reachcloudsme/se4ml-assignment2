@@ -97,3 +97,37 @@ def test_insufficient_telemetry_warning(caplog, monkeypatch):
     assert result["points"] == 2
     assert "Insufficient telemetry" in caplog.text
     assert "api-gateway" in caplog.text
+
+
+def test_successful_scoring():
+    from unittest.mock import patch
+
+    client = TestClient(app)
+    expected = {
+        "service": "api-gateway",
+        "anomaly_score": 0.03,
+        "threshold": 0.025,
+        "is_anomaly": True,
+        "points": 21,
+    }
+
+    with patch("app.score_service", return_value=expected):
+        response = client.post("/score/api-gateway")
+
+    assert response.status_code == 200
+    assert response.json() == expected
+
+
+def test_successful_scoring_schema():
+    from api_schemas import ScoreResult
+
+    result = ScoreResult(
+        service="api-gateway",
+        anomaly_score=0.03,
+        threshold=0.025,
+        is_anomaly=True,
+        points=21,
+    )
+
+    assert result.is_anomaly is True
+    assert result.points == 21
