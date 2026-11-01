@@ -31,3 +31,28 @@ def test_anomaly_score():
 
     assert score == 0.01235
     mock_detector.predict.assert_called_once()
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        np.ones((5, 3)),
+        np.ones((4, 2)),
+        np.array([[float("nan"), 1.0]] * 5),
+        np.array([[float("inf"), 1.0]] * 5),
+    ],
+)
+def test_invalid_inference_input(window):
+    with pytest.raises(ValueError):
+        calculate_anomaly_score(window)
+
+
+@pytest.mark.parametrize("output", [[], [float("nan")], [float("inf")]])
+def test_invalid_detector_output(output):
+    with patch("model.inference.detector") as mock_detector:
+        mock_detector.predict.return_value = output
+        with pytest.raises(ValueError):
+            calculate_anomaly_score(np.ones((5, 2)))

@@ -1,325 +1,172 @@
-# PredictOps — ML-Based Anomaly Detection for Microservices
+# PredictOps — ML-Based Anomaly Detection
 
-**Course:** AIMLZG546 — Software Engineering for Machine Learning  
-**Assignment:** II — Implementation, Code Quality and Quality Assurance  
-**Group:** 56  
-**Technology Stack:** Python, FastAPI, Time-RCD, Docker, Kubernetes, AWS EKS, Prometheus, Grafana Mimir and Alertmanager
+**Course:** AIMLZG546 — Software Engineering for Machine Learning
+**Assignment:** II — Implementation and Quality Assurance
+**Group:** 56
 
-## 1. Project Overview
+## Overview
 
-PredictOps is an ML-based monitoring system designed to detect unusual behaviour in a microservices application.
+PredictOps monitors banking microservices using CPU and memory telemetry collected through Prometheus and Grafana Mimir.
 
-We used a banking microservices environment running on AWS EKS and integrated an ML inference service to analyse application metrics.
+A pretrained Time-RCD model generates anomaly scores. FastAPI exposes scoring and monitoring endpoints.
 
-The main objective of Assignment II was to improve the software engineering quality of our ML application by implementing modular code, error handling, logging, automated testing, code quality checks and deployment security.
+Assignment II focuses on modular design, API reliability, logging, automated testing, model training, inference validation and quality evaluation.
 
-## 2. Project Objectives
+## Architecture
 
-This assignment focuses on two major objectives:
+Production monitoring:
 
-**Objective 1 — Implementation and Code Sharing**
+Banking Microservices → Prometheus/Mimir → Time-RCD → FastAPI Metrics → Prometheus Alerts → Alertmanager
 
-- Refactor the ML application into separate modules.
-- Improve error handling and logging.
-- Develop REST APIs for model inference.
-- Apply code formatting and linting.
-- Demonstrate production-oriented code organisation.
+Experimental evaluation:
 
-**Objective 2 — Quality Assurance**
+Synthetic Telemetry → Time-RCD Scores → Trained Logistic Regression Calibrator → Predictions → Precision and Recall
 
-- Implement automated testing using pytest.
-- Validate ML inference behaviour.
-- Implement data and model quality metrics.
-- Improve application security.
-- Demonstrate deployment readiness and production monitoring.
+The experimental calibrator does not control production alerts.
 
-## 3. System Architecture
+## Project Structure
 
-```text
-Banking Microservices (AWS EKS)
-              |
-              v
-       Prometheus Metrics
-              |
-              v
-         Grafana Mimir
-              |
-              v
-      PredictOps ML Service
-       (Python + FastAPI)
-              |
-              v
-       Time-RCD Inference
-              |
-              v
-        Anomaly Scores
-              |
-              v
-     Prometheus Monitoring
-              |
-              v
-          Alertmanager
-              |
-              v
-       Email Notifications
-```
-
-The banking application generates monitoring metrics. PredictOps retrieves those metrics from Mimir, performs anomaly detection using Time-RCD and exposes the results through FastAPI and Prometheus metrics.
-
-## 4. Technologies Used
-
-| Technology | Purpose |
+| File or directory | Purpose |
 |---|---|
-| Python | Application development |
-| FastAPI | REST API development |
-| Time-RCD | ML-based anomaly detection |
-| pytest | Automated testing |
-| Ruff | Python linting |
-| Black | Code formatting |
-| Bandit | Python security scanning |
-| Docker | Application containerisation |
-| AWS ECR | Docker image registry |
-| AWS EKS | Kubernetes deployment |
-| Prometheus | Metrics and alerting |
-| Grafana Mimir | Metrics storage and querying |
-| Alertmanager | Alert notification management |
-| GitHub | Version control and code sharing |
+| `predictops-ml/app.py` | FastAPI endpoints and scoring |
+| `predictops-ml/api_schemas.py` | Pydantic response schemas |
+| `predictops-ml/data/mimir.py` | Metrics retrieval and logging |
+| `predictops-ml/model/inference.py` | Time-RCD inference and validation |
+| `predictops-ml/model/training.py` | Logistic regression calibrator training |
+| `predictops-ml/quality/data_quality.py` | Missingness and completeness |
+| `predictops-ml/quality/model_quality.py` | Precision, recall and confusion counts |
+| `predictops-ml/quality/data_quality_evaluation.py` | Synthetic data-quality demonstration |
+| `predictops-ml/quality/evaluation.py` | Synthetic calibrator-only evaluation |
+| `predictops-ml/quality/time_rcd_experiment.py` | Synthetic telemetry generation |
+| `predictops-ml/quality/pipeline_evaluation.py` | Actual Time-RCD and calibrator evaluation |
+| `predictops-ml/tests/` | Automated pytest tests |
+| `predictops-ml/Dockerfile` | Containerised inference API |
+| `evidence/` | Historical code and refactoring comparison |
 
-## 5. Project Structure
+## REST API
 
-The main Assignment II implementation is located inside `predictops-ml/`.
-
-```text
-predictops-ml/
-├── app.py
-├── Dockerfile
-├── predictops-ml.yaml
-├── data/
-│   └── mimir.py
-├── model/
-│   └── inference.py
-├── quality/
-│   ├── data_quality.py
-│   └── model_quality.py
-└── tests/
-    ├── test_api.py
-    ├── test_mimir.py
-    ├── test_inference.py
-    ├── test_data_quality.py
-    └── test_model_quality.py
-```
-
-### Important Files
-
-- **`app.py`** — FastAPI endpoints and application integration.
-- **`data/mimir.py`** — Retrieves metrics from Grafana Mimir.
-- **`model/inference.py`** — Performs Time-RCD anomaly inference.
-- **`quality/data_quality.py`** — Checks data completeness and missing values.
-- **`quality/model_quality.py`** — Implements precision and recall calculations.
-- **`tests/`** — Contains automated tests for the application.
-- **`Dockerfile`** — Builds the ML application container.
-- **`predictops-ml.yaml`** — Defines the Kubernetes deployment and service.
-
-## 6. REST API Implementation
-
-The application exposes the following endpoints:
-
-| Endpoint | Method | Description |
+| Endpoint | Method | Purpose |
 |---|---|---|
-| `/health` | GET | Checks application health |
-| `/score` | POST | Runs anomaly scoring across monitored services |
-| `/score/{service}` | POST | Runs anomaly scoring for a specified service |
-| `/metrics` | GET | Exposes Prometheus-compatible metrics |
+| `/health` | GET | Health status |
+| `/metrics` | GET | Prometheus-compatible metrics |
+| `/score` | POST | Score all configured services |
+| `/score/{service}` | POST | Score a selected service |
 
-Example health check:
+Single-service API tests cover successful HTTP 200 scoring, unknown-service 404, upstream-data errors 502, unavailable metrics 503 and inference failures 500.
 
-```bash
-curl http://localhost:8000/health
-```
+## Automated Testing
 
-Example anomaly detection:
+Run from the repository root after installing dependencies:
 
-```bash
-curl -X POST http://localhost:8000/score
-```
+    python -m pytest predictops-ml/tests/ -v
 
-## 7. Automated Testing
+**Latest verified result: 28 tests passed.**
 
-We used **pytest** to implement automated testing for critical application components.
+Tests include API behaviour, Mimir retrieval, missing-data warnings, data validation, inference validation, model training and quality evaluation.
 
-Testing covers:
+## Code Quality and Security
 
-- API endpoint behaviour.
-- Mimir data retrieval and error handling.
-- ML inference output validation.
-- Data quality calculations.
-- Model quality calculations.
+    python -m ruff check predictops-ml/
+    python -m black --check predictops-ml/
+    python -m bandit -r predictops-ml/ -x predictops-ml/tests/
 
-### Run Tests
+Ruff and Black checks passed. Bandit reported zero findings in 386 scanned lines in the earlier final evaluation scan. This does not guarantee complete security.
 
-From the repository root:
+## Model Training
 
-```bash
-./.venv/bin/python -m pytest predictops-ml/tests/ -v
-```
+The experimental logistic regression calibrator is trained on labelled anomaly scores.
 
-**Verified result: 11 tests passed.**
+In the small-batch synthetic training test:
 
-These tests provide evidence that the tested components behave as expected under the covered scenarios.
+- Initial binary cross-entropy: **0.69315**
+- Trained binary cross-entropy: **0.00103**
 
-## 8. Code Quality and Security Checks
+The pretrained Time-RCD model remains frozen.
 
-We used multiple tools to improve code quality.
+## End-to-End Model Evaluation
 
-### Ruff — Linting
+Run:
 
-```bash
-ruff check predictops-ml/
-```
+    PYTHONPATH=predictops-ml python -m quality.pipeline_evaluation
 
-**Result:** All checks passed.
+The experiment uses actual pretrained Time-RCD inference on reproducible synthetic CPU and memory windows, followed by calibration and held-out evaluation.
 
-### Black — Formatting
+| Measurement | Result |
+|---|---:|
+| Training windows | 18 |
+| Evaluation windows | 18 |
+| Precision | 70.59% |
+| Recall | 100% |
+| Accuracy | 72.22% |
+| True positives | 12 |
+| True negatives | 1 |
+| False positives | 5 |
+| False negatives | 0 |
+| False-positive rate | 83.33% |
 
-```bash
-./.venv/bin/python -m black --check predictops-ml/
-```
+The high false-positive rate indicates limited discrimination of normal windows. An always-anomaly baseline would achieve 66.67% precision and 100% recall on this class distribution.
 
-**Result:** 13 files unchanged.
+These results are from **synthetic telemetry with controlled changes**, not labelled production banking incidents.
 
-### Bandit — Security Scanning
+## Data Quality
 
-```bash
-./.venv/bin/python -m bandit -r predictops-ml/ -x predictops-ml/tests/
-```
+Run:
 
-**Result:** No security issues identified in the scanned application code.
+    PYTHONPATH=predictops-ml python -m quality.data_quality_evaluation
 
-## 9. Data and Model Quality
+Results from the synthetic telemetry sample:
 
-We implemented the following quality metrics:
+- Missing values: 1 of 42
+- Missing-value rate: 2.381%
+- Row-count completeness: 21/21 = 100%
 
-| Category | Metric | Purpose |
-|---|---|---|
-| Data Quality | Missing-value rate | Measures the proportion of missing data |
-| Data Quality | Completeness | Measures the proportion of available data |
-| Model Quality | Precision | Measures how many predicted positives are correct |
-| Model Quality | Recall | Measures how many actual positives are detected |
+Row-count completeness does not independently validate timestamp uniqueness or sampling alignment.
 
-The precision and recall calculations were validated using sample labels during testing.
+## Research vs Production Code
 
-**Limitation:** Actual production precision and recall have not been established using a labelled real-world dataset.
+The historical Assignment I implementation is available at commit `cac4709`.
 
-## 10. Docker and Kubernetes Deployment
+See:
 
-We containerised the ML application and deployed it to an AWS EKS Kubernetes cluster.
+- `evidence/assignment1_app.py.txt`
+- `evidence/research_vs_production.diff`
 
-The deployment uses an AMD64-compatible Docker image stored in AWS ECR.
+The original implementation combined telemetry retrieval, inference and API logic in one file. Assignment II separates modules and adds automated tests, validation, structured responses and logging.
 
-**Docker image tag:** `assignment2-amd64`
+## Deployment Scope
 
-We also improved container security by:
+The earlier threshold-based PredictOps API was deployed and verified on AWS EKS using Docker and Kubernetes.
 
-- Running the application as a non-root user.
-- Disabling privilege escalation.
-- Dropping all Linux capabilities.
+The newer experimental calibration workflow was evaluated locally. It has not been deployed into production or connected to production alert decisions.
 
-### Check Kubernetes Deployment
+The Dockerfile is intended for the inference API, not the full experimental training environment.
 
-```bash
-kubectl get deployment predictops-ml -n default
-```
+## Installation and Reproducibility
 
-**Verified result:**
+Use Python 3.12 for the local experimental workflow. From the repository root:
 
-```text
-NAME            READY   UP-TO-DATE   AVAILABLE
-predictops-ml   1/1     1            1
-```
+    python3.12 -m venv .venv
+    source .venv/bin/activate
+    python -m pip install -r predictops-ml/requirements.txt -r predictops-ml/requirements-dev.txt
+    python -m pip install torch scipy huggingface-hub jaxtyping einops
+    python -m pip install --no-deps "git+https://github.com/thu-sail-lab/Time-RCD.git"
 
-## 11. Monitoring and Alerting
+The pretrained model may download additional weights when first loaded. CPU execution is supported.
 
-PredictOps integrates with Prometheus and Alertmanager to monitor anomaly detection results.
+## Production Experimentation and Security
 
-The application exposes metrics including:
+A future shadow deployment could compare candidate anomaly predictions with the existing threshold-based service before changing alert decisions.
 
-```text
-predictops_anomaly_score
-predictops_anomaly_threshold
-predictops_is_anomaly
-```
+The Docker/Kubernetes application uses a non-root user, disables privilege escalation and drops Linux capabilities.
 
-We verified anomaly scoring across eight banking services.
+## Repository
 
-During testing, anomaly alerts fired for:
+**GitHub:** https://github.com/reachcloudsme/se4ml-assignment2
 
-- `api-gateway`
-- `ai-service`
-- `fraud-service`
+**Assignment II branch:** `assignment2-improvements`
 
-Prometheus successfully evaluated these alerts, and Alertmanager received them.
+**Last published evaluation commit:** `7d6faf3` (subsequent improvements may change this).
 
-Alertmanager recorded three email notification attempts without recorded failures. This does not independently confirm delivery to the recipient's inbox.
+## Attribution
 
-## 12. Production Testing Strategy
-
-For future production releases, we propose using **shadow deployment**.
-
-In this approach, the new version of PredictOps would analyse the same monitoring data as the existing version, without replacing production alert decisions immediately.
-
-We would compare anomaly scores, system performance and false-positive rates before promoting the new version.
-
-This approach can reduce the risk of introducing changes directly into the production monitoring workflow.
-
-## 13. Assignment II Results
-
-| Activity | Result |
-|---|---|
-| Modular Python application | Implemented |
-| REST API | Implemented |
-| Logging and error handling | Implemented |
-| Automated pytest tests | 11 passed |
-| Ruff linting | Passed |
-| Black formatting | Passed |
-| Bandit security scan | Passed |
-| Data quality metrics | Implemented |
-| Model quality metric calculations | Implemented and unit tested |
-| Docker image | Built and pushed to ECR |
-| AWS EKS deployment | 1/1 available |
-| Kubernetes security hardening | Verified |
-| Live ML anomaly detection | Verified |
-| Prometheus alerting | Verified |
-| Alertmanager notification attempts | Verified |
-
-### Remaining Validation
-
-A research-versus-production comparison and a specific model-training test require additional evidence for complete coverage of the assignment rubric.
-
-Real-world model accuracy also requires a labelled evaluation dataset.
-
-## 14. Original Application and Attribution
-
-The PredictOps system uses an existing banking microservices application as the monitored workload.
-
-The original banking application's repository should be linked here after confirming its exact source:
-
-**Original banking application:** `Original Banking Application
-
-The banking microservices application is based on the open-source project maintained by Speedscale.
-
-Original repository: https://github.com/speedscale/microsvc`
-
-The PredictOps contribution focuses on ML-based monitoring, anomaly inference, software quality improvements, testing, deployment and alerting.
-
-## 15. Repository and Branch
-
-**Assignment II branch:** `assignment-2`
-
-**Latest verified Assignment II commit:** `380b7b0`
-
-The repository includes the implementation, tests and deployment configuration used for this assignment.
-
----
-
-**Course:** AIMLZG546 — Software Engineering for Machine Learning  
-**Assignment II | Group 56 | BITS Pilani WILP**
+The banking microservices workload is separate from the PredictOps ML monitoring and evaluation code. Attribution to its original project should be verified against the actual source repository before submission.
